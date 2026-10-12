@@ -2,7 +2,7 @@
 # Builds an installable arm64 release APK locally (no Expo account / EAS needed).
 # Tuned for a 2-core / 8 GB GitHub Codespace: single-ABI, capped Gradle memory,
 # swapfile, and the two heavy C++ compiles run as separate Gradle invocations
-# so the daemon doesn't get OOM-killed. Output: ./iron-log.apk
+# so the daemon doesn't get OOM-killed. Output: ./buku-besi.apk
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -73,5 +73,5 @@ for task in ':expo-modules-core:buildCMakeRelWithDebInfo[arm64-v8a]' \
 done
 cd "$ROOT"
 
-cp android/app/build/outputs/apk/release/app-release.apk iron-log.apk
-echo "==> Done: $ROOT/iron-log.apk ($(du -h iron-log.apk | cut -f1))"
+cp android/app/build/outputs/apk/release/app-release.apk buku-besi.apk
+echo "==> Done: $ROOT/buku-besi.apk ($(du -h buku-besi.apk | cut -f1))"

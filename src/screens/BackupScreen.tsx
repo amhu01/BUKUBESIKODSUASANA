@@ -109,7 +109,7 @@ export function BackupScreen() {
     try {
       const sessions = await exportAllSessions();
       const payload = sessions.map(({ id: _id, ...rest }) => rest);
-      const file = new File(Paths.cache, `iron-log-backup-${todayString()}.json`);
+      const file = new File(Paths.cache, `buku-besi-backup-${todayString()}.json`);
       if (file.exists) file.delete();
       file.create();
       file.write(JSON.stringify(payload, null, 2));
@@ -119,7 +119,7 @@ export function BackupScreen() {
       }
       await Sharing.shareAsync(file.uri, {
         mimeType: 'application/json',
-        dialogTitle: t('Save Iron Log backup'),
+        dialogTitle: t('Save Buku Besi backup'),
         UTI: 'public.json',
       });
       setStatus(tn(payload.length, 'Exported {n} session.', 'Exported {n} sessions.'));

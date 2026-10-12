@@ -1,6 +1,19 @@
-# Iron Log — React Native Rewrite
+# Buku Besi (formerly Iron Log) — React Native Rewrite
 
 ## Project
+
+**Renamed to Buku Besi** (Malay, "iron book") on 2026-10-12: "Iron Log" is
+already taken (ironlog.org). The name was checked with web searches of the
+Play Store / App Store / GitHub; candidates rejected on the way: SetScribe,
+RepNote, Chalkpad/Chalk (all existing apps), Liftpad/Liftscribe (crowded
+"Lift…" space) and Ironquill (an Android developer publishes a *workout* app
+under `com.ironquill`, plus an "Iron Quill Tattoo" app). Only *visible* names
+changed — app label, header eyebrow, share card, share text, file names. Two
+internal names deliberately keep the old one, **forever**: the Android package
+id `com.amirhusni.ironlog` (changing it makes Android install a separate app
+with an empty database) and the SQLite file `ironlog.db` (renaming orphans
+every workout). Old `iron-log-backup-*.json` files still import — import reads
+content, not the filename.
 
 Rewrite of an existing single-file HTML/localStorage gym-tracker app ("Iron Log")
 into a real native-feeling mobile app using Expo (React Native) + TypeScript.
@@ -39,6 +52,11 @@ ABS replaces CORE).
 v11 (2026-10-06): **Bahasa Melayu** UI and **colour customisation** (8 accent
 colours × 4 dark backgrounds), both under the Backup tab, now labelled
 Settings; changes apply instantly without a restart.
+v12 (2026-10-12): rebrand to **Buku Besi**; the in-progress Log workout is
+**persisted to SQLite** so a crash/kill no longer loses it; share card gets
+5 more shapes (bolt, star, flame, crown, medal) and a **custom-text pattern**
+(up to 8 characters, the exercises fill block letters); the pattern picker
+is a dropdown; the card is only built when you tap **Generate card**.
 This file is the source of truth
 for plan, progress, decisions, and blockers — update it continuously as work
 happens. If a session ends (out of context/tokens) or a different model picks
@@ -376,16 +394,52 @@ Run: `npx expo start` then open in Expo Go. Typecheck: `npx tsc --noEmit`.
      indexes, named at render).
    - Applying a change: App bumps a `version` that keys `RootNavigator`, so
      every screen redraws with new colours/text; `NavigationContainer` gets the
-     saved nav state back, so you stay on Settings. That remount would wipe an
-     unsaved Log session, so LogScreen keeps its draft in a module variable
-     (`unsavedDraft`, fed by SessionEditor's `onDraftChange`) — memory only,
-     cleared on save or when a template is loaded.
+     saved nav state back, so you stay on Settings. The unsaved Log session
+     survives that via [draftStore.ts](src/draftStore.ts) (see 8).
    - Muscle group picker (v11, on request — 17 pills was too many): each
      ExerciseCard shows a `SelectField` that opens the `OptionSheet` (search
      included, "None" clears it) instead of a horizontal chip row.
    - Adding UI text: wrap it in `t()`, add the Malay to `MS`, then re-run the
      coverage check (extract every `t`/`tn` key, compare with `MS`, compare
      `{placeholders}`) — see the v11 verification entry.
+
+8. **Crash-proof Log draft** (v12, reported: "if my app crashes, all the
+   workout I've typed disappears"). [draftStore.ts](src/draftStore.ts) holds
+   the SessionEditor draft (`onDraftChange` → `setDraft`) in memory and writes
+   it as JSON to the `settings` table under `logDraft`, debounced 400 ms, and
+   **immediately** when `AppState` leaves `active` (Android can kill a
+   backgrounded app without warning). An empty form deletes the row instead.
+   App.tsx awaits `loadDraft()` before mounting, so LogScreen's initial values
+   come from it; a draft that came off disk shows a "Restored the workout…"
+   banner with DISCARD (confirm) / KEEP. Saving or loading a template calls
+   `clearDraft()`. Unreadable or wrong-shaped JSON is ignored (never crash on
+   launch). Session *edits* in History are not persisted — only the Log tab.
+
+9. **Share-card patterns** (v12).
+   - Presets: the original five plus bolt / star / flame / crown / medal,
+     defined as polygons (`inPolygon` ray-casting) or circle unions. First
+     renders: the bolt was too thin to fill and the flame read as a teardrop —
+     bolt fattened, flame redrawn with three tongues.
+   - Custom text: `CardShape` is a preset id or `text:WORD`.
+     [pixelFont.ts](src/components/pixelFont.ts) has a 5×7 block font (A–Z,
+     0–9, `!`, `-`); `sanitizePatternText` uppercases, strips everything else,
+     caps at `PATTERN_TEXT_MAX` = 8. `textMask` picks 1–3 rows (split at spaces
+     if any, else evenly) by whichever gives the widest stroke within 936 ×
+     900 px. Because 1-cell strokes can't be filled densely enough to carry the
+     letterform alone (first render: AMIR was unreadable), text patterns get a
+     **faint letter tint** (`backdrop`, 7% white rounded rects) and their filler
+     uses **single words** from the names (LAT, CURL…) instead of whole names;
+     every lift is still placed once in full. Presets keep the no-outline look.
+   - Hero size now scales with the shape's usable **area** (`insideArea`,
+     WeakMap-cached), not its height: the thin bolt started too big, failed and
+     reran the whole pass (2.1 s → 1.3 s under `--jitless`).
+   - SessionSummaryScreen: pattern `SelectField` + `OptionSheet` (presets +
+     "Custom text…"), a text box with an n/8 counter for custom, and **no work
+     on open** — the preview shows a "Generate card" button and the search runs
+     only when tapped (spinner meanwhile). A pattern already built during this
+     visit shows instantly (`isCardPrepared`). Copy/Share image stay disabled
+     until the card exists. Choice and custom text are remembered for the app
+     session.
 
 ## Storage
 
@@ -784,6 +838,33 @@ confirmed all 3 persisted correctly with exact same values.")
   "Tap to choose" / "Tekan untuk pilih" / "Kumpulan otot"; coverage check
   re-run at 184 keys, 0 missing.
 
+- v12 verified (2026-10-12): `npx tsc --noEmit` clean; `npx expo export
+  --platform android` bundled 1139 modules. Crash draft — the real scenario,
+  across processes: process 1 loads, types two drafts in quick succession,
+  waits, then `process.exit(0)`; a **separate** process 2 reopening the same
+  SQLite file got back the exact latest draft (name, notes, machine, both
+  sets), flagged restored; prefs still load beside it; KEEP keeps it; a
+  change followed by an `AppState` 'background' event is on disk at once (not
+  after 400 ms); an empty form leaves no row; `clearDraft` empties memory and
+  disk; corrupted (`{not json`) and wrong-shaped JSON are ignored without
+  crashing. Patterns — rendered and looked at through the SVG-shim harness
+  (rebuilt again, scratchpad wiped): 5 new presets (bolt and flame redrawn
+  after the first pass), custom text PUSH / AMIR / LEG DAY / GYMRAT99 / PR!
+  (unreadable until the letter tint + word filler), and all 10 presets again
+  after the area-based hero sizing (no regressions). Layout under `node
+  --jitless` for 14 lifts: 0.5–1.1 s, worst bolt 1.3 s. Translation coverage
+  204 keys, 0 missing / unused / placeholder mismatches.
+- v12 APK verified (2026-10-12): `scripts/build-apk.sh` exit 0 (stages 2m5s /
+  53s / 3m39s) → **`buku-besi.apk`** (the old `iron-log.apk` was deleted).
+  `apksigner verify` passes; `aapt2 dump badging`: label **'Buku Besi'**,
+  package still `com.amirhusni.ironlog` (so it updates in place and keeps the
+  data). The `android/` label was patched directly in `strings.xml` +
+  `settings.gradle` to match `app.json` rather than re-running prebuild (which
+  would wipe `android/` and cost ~20 min); a future prebuild regenerates the
+  same values from `app.json`. Bundle contains "BUKU BESI", the
+  `buku-besi-backup-` filename, `logDraft`, the restore banner text, "Generate
+  card", "Custom text", MAHKOTA / PETIR, still `ironlog.db`, and no "IRON LOG".
+
 ## Blockers / known issues
 
 (Document anything infeasible, any fallback taken instead of the original
@@ -886,8 +967,8 @@ plan, or anything left unfinished, with reasoning.)
 ## Final build
 
 - Local APK: latest build is whatever `scripts/build-apk.sh` last produced
-  (v11 on 2026-10-06; the cold v3 build of 2026-09-17 is described here) —
-  `iron-log.apk` at the project root (gitignored via `*.apk`), 34 MiB,
+  (v12 on 2026-10-12; the cold v3 build of 2026-09-17 is described here) —
+  `buku-besi.apk` at the project root (was `iron-log.apk` before v12) (gitignored via `*.apk`), 34 MiB,
   arm64-v8a, signed with the debug keystore (fine for sideloading; generate a
   real keystore only if you ever publish to the Play Store). Built with
   `scripts/build-apk.sh`, which needs no Expo account. The v3 build was the
@@ -896,7 +977,7 @@ plan, or anything left unfinished, with reasoning.)
   4m44s (:app CMake) / 9m36s (assembleRelease), after two script bugs were
   found and fixed on the way (see Blockers: trailing newline, JDK 25). Because
   `SendUserFile` was unavailable in that session, the user downloads
-  `iron-log.apk` from the Codespace file explorer (right-click → Download). Rebuild after code changes with the same script: with the
+  `buku-besi.apk` from the Codespace file explorer (right-click → Download). Rebuild after code changes with the same script: with the
   native project and Gradle caches warm it's ~3-5 min (only the JS bundle and
   packaging rerun); a cold Codespace is ~25-30 min plus a ~2.5 GB SDK download.
 - What the script does (so it can be redone by hand): installs Android
@@ -917,7 +998,7 @@ plan, or anything left unfinished, with reasoning.)
   2-core / 8 GB Codespace died with "Gradle build daemon disappeared
   unexpectedly" during the C++ compile (OOM-killed, no swap). Swap + the caps
   + one JVM per heavy stage fixed it; stage times were 2 min / 4.5 min / 12 min.
-- Installing on the phone: get `iron-log.apk` onto the phone (the file is over
+- Installing on the phone: get `buku-besi.apk` onto the phone (the file is over
   the 30 MiB chat-upload cap, so send it zipped — it compresses to ~16 MiB
   because the .so files are stored uncompressed — or download it from the
   Codespace file explorer), open it, allow installs from that source.

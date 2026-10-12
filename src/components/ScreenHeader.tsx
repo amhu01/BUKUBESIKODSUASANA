@@ -12,7 +12,7 @@ export function ScreenHeader({ title, subtitle, right }: ScreenHeaderProps) {
   return (
     <View style={styles.wrap}>
       <View style={styles.textCol}>
-        <Text style={styles.eyebrow}>IRON LOG</Text>
+        <Text style={styles.eyebrow}>BUKU BESI</Text>
         <Text style={styles.title}>{title}</Text>
         {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
       </View>

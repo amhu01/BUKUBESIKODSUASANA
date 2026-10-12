@@ -3,6 +3,7 @@ import Svg, { G, Rect, Text as SvgText } from 'react-native-svg';
 import type { SessionSummary, SummaryExercise } from '../types';
 import { FIGURE_H, FIGURE_W, MuscleFigure, muscleScale } from './MuscleMap';
 import { GROUP_REGIONS, regionLevels } from './muscleMapShapes';
+import { sanitizePatternText, textMask } from './pixelFont';
 import { formatDateDisplay } from '../utils/date';
 import { formatVolume } from '../utils/format';
 import { muscleLabel, t } from '../i18n';
@@ -91,7 +92,20 @@ function splitInTwo(text: string): string[] {
   return [text.slice(0, at), text.slice(at + 1)];
 }
 
-export type CardShape = 'dumbbell' | 'kettlebell' | 'plate' | 'trophy' | 'heart';
+export type PresetShape =
+  | 'dumbbell'
+  | 'kettlebell'
+  | 'plate'
+  | 'trophy'
+  | 'heart'
+  | 'bolt'
+  | 'star'
+  | 'flame'
+  | 'crown'
+  | 'medal';
+
+/** A preset shape, or `text:WORD` for the user's own letters. */
+export type CardShape = PresetShape | `text:${string}`;
 
 interface ShapeDef {
   label: string;
@@ -99,6 +113,13 @@ interface ShapeDef {
   h: number;
   /** Is the point (in shape-local px) inside the silhouette? */
   inside: (x: number, y: number) => boolean;
+  /**
+   * Custom-text patterns only: rectangles drawn as a faint tint behind the words so
+   * the letters read at a glance (1-cell strokes can't be filled densely enough to
+   * carry the letterform alone), and filler made of single words, which pack into
+   * thin strokes far better than whole exercise names.
+   */
+  backdrop?: { x: number; y: number; w: number; h: number }[];
 }
 
 const inEllipse = (x: number, y: number, cx: number, cy: number, rx: number, ry: number) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
@@ -120,7 +141,38 @@ function dumbbell(w: number, h: number): ShapeDef['inside'] {
   };
 }
 
-const SHAPES: Record<CardShape, ShapeDef> = {
+/** Ray-casting point-in-polygon. */
+function inPolygon(x: number, y: number, pts: number[][]): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function starPoints(cx: number, cy: number, outer: number, inner: number): number[][] {
+  return Array.from({ length: 10 }, (_, i) => {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  });
+}
+
+const STAR = starPoints(410, 430, 420, 190);
+const BOLT = [[330, 0], [40, 500], [265, 500], [150, 860], [610, 300], [370, 300], [530, 0]];
+// Three tongues (small left, tall centre, right) over a rounded base.
+const FLAME = [
+  [320, 860], [200, 840], [100, 780], [35, 670], [15, 540], [40, 410], [95, 300], [120, 170], [170, 250], [210, 320],
+  [235, 200], [270, 90], [310, 0], [360, 110], [395, 230], [420, 280], [470, 200], [520, 110], [560, 230], [600, 350],
+  [630, 490], [615, 640], [545, 770], [440, 840],
+];
+const CROWN = [[20, 90], [220, 330], [430, 30], [640, 330], [840, 90], [760, 470], [100, 470]];
+const RIBBON_L = [[120, 0], [270, 0], [390, 280], [240, 280]];
+const RIBBON_R = [[540, 0], [390, 0], [270, 280], [420, 280]];
+
+const SHAPES: Record<PresetShape, ShapeDef> = {
   dumbbell: { label: 'DUMBBELL', w: CONTENT_WIDTH, h: 470, inside: dumbbell(CONTENT_WIDTH, 470) },
   kettlebell: {
     label: 'KETTLEBELL',
@@ -173,17 +225,61 @@ const SHAPES: Record<CardShape, ShapeDef> = {
       return a * a * a - x * x * y * y * y <= 0;
     },
   },
+  bolt: { label: 'BOLT', w: 640, h: 860, inside: (x, y) => inPolygon(x, y, BOLT) },
+  star: { label: 'STAR', w: 820, h: 820, inside: (x, y) => inPolygon(x, y, STAR) },
+  flame: { label: 'FLAME', w: 640, h: 860, inside: (x, y) => inPolygon(x, y, FLAME) },
+  crown: {
+    label: 'CROWN',
+    w: 860,
+    h: 570,
+    inside: (x, y) => inPolygon(x, y, CROWN) || (x >= 100 && x < 760 && y >= 495 && y < 570),
+  },
+  medal: {
+    label: 'MEDAL',
+    w: 660,
+    h: 840,
+    // Disc hanging from two crossed ribbon tails, with a gap between them and the disc.
+    inside: (x, y) => Math.hypot(x - 330, y - 560) <= 280 || (y < 265 && (inPolygon(x, y, RIBBON_L) || inPolygon(x, y, RIBBON_R))),
+  },
 };
 
-export const CARD_SHAPES: { id: CardShape; label: string }[] = (Object.keys(SHAPES) as CardShape[]).map((id) => ({
+export const CARD_SHAPES: { id: PresetShape; label: string }[] = (Object.keys(SHAPES) as PresetShape[]).map((id) => ({
   id,
   label: SHAPES[id].label,
 }));
+
+/** Tallest a custom-text pattern may get; letters wrap onto more rows rather than shrink to slivers. */
+const TEXT_MAX_H = 900;
+
+export function textPattern(text: string): CardShape {
+  return `text:${sanitizePatternText(text).trim()}`;
+}
+
+function shapeDef(shape: CardShape): ShapeDef {
+  if (shape.startsWith('text:')) {
+    const text = shape.slice(5);
+    return { label: text, ...textMask(text, CONTENT_WIDTH, TEXT_MAX_H) };
+  }
+  return SHAPES[shape as PresetShape];
+}
 
 /**
  * Free-space raster of the shape with a summed-area table, so "does this box sit
  * entirely on free cells inside the shape?" is four lookups instead of a scan.
  */
+const areaCache = new WeakMap<ShapeDef, number>();
+
+/** Area inside a shape, sampled on the same grid the packer uses. */
+function insideArea(def: ShapeDef): number {
+  let area = areaCache.get(def);
+  if (area === undefined) {
+    area = 0;
+    for (let y = CELL / 2; y < def.h; y += CELL) for (let x = CELL / 2; x < def.w; x += CELL) if (def.inside(x, y)) area += CELL * CELL;
+    areaCache.set(def, area);
+  }
+  return area;
+}
+
 class ShapeGrid {
   readonly gw: number;
   readonly gh: number;
@@ -317,8 +413,15 @@ function tryPlace(grid: ShapeGrid, name: string, size: number) {
  * Then names repeat as small, faint filler until nothing more fits, which is what
  * makes the silhouette readable with only a handful of lifts.
  */
-function layoutShape(exercises: SummaryExercise[], def: ShapeDef): { words: CloudWord[]; height: number } {
-  if (exercises.length === 0) return { words: [], height: 0 };
+interface Cloud {
+  words: CloudWord[];
+  height: number;
+  backdrop: { x: number; y: number; w: number; h: number }[];
+}
+
+function layoutShape(exercises: SummaryExercise[], def: ShapeDef): Cloud {
+  const backdrop = (def.backdrop ?? []).map((b) => ({ ...b, x: b.x + PAD + (CONTENT_WIDTH - def.w) / 2 }));
+  if (exercises.length === 0) return { words: [], height: 0, backdrop: [] };
 
   const ranked = exercises
     .map((ex, i) => ({ ex, i }))
@@ -326,8 +429,10 @@ function layoutShape(exercises: SummaryExercise[], def: ShapeDef): { words: Clou
     .map(({ ex }) => ex);
   const n = ranked.length;
   const left = PAD + (CONTENT_WIDTH - def.w) / 2;
-  // WORD_MAX was tuned on the 470 px dumbbell; taller shapes get a proportionally bigger hero.
-  const wordMax = WORD_MAX * Math.sqrt(def.h / SHAPES.dumbbell.h);
+  // WORD_MAX was tuned on the dumbbell. Scale the hero by usable *area*, not height:
+  // a tall but thin shape (the bolt) otherwise starts too big, fails, and reruns the
+  // whole pass several times (2.1 s → see the v12 log).
+  const wordMax = WORD_MAX * Math.min(1.6, Math.max(0.6, Math.sqrt(insideArea(def) / insideArea(SHAPES.dumbbell))));
   const boxOf = (p: { cx: number; cy: number; bw: number; bh: number }): Box => ({
     x0: p.cx - p.bw / 2,
     y0: p.cy - p.bh / 2,
@@ -361,12 +466,15 @@ function layoutShape(exercises: SummaryExercise[], def: ShapeDef): { words: Clou
     if (!allPlaced) continue;
 
     // Filler never competes with the real names: always smaller, always faint.
+    const tokens = def.backdrop
+      ? [...new Set(ranked.flatMap((ex) => ex.name.split(' ')).filter((w) => w.length > 1))]
+      : ranked.map((ex) => ex.name);
     let next = 0;
     for (const fillSize of FILL_SIZES.filter((f) => f < smallest * 0.95)) {
       let misses = 0;
-      while (misses < n && words.length < MAX_WORDS) {
-        const ex = ranked[next++ % n];
-        const spot = tryPlace(grid, ex.name, fillSize);
+      while (misses < tokens.length && words.length < MAX_WORDS) {
+        const token = tokens[next++ % tokens.length];
+        const spot = tryPlace(grid, token, fillSize);
         if (!spot) {
           misses++;
           continue;
@@ -386,9 +494,9 @@ function layoutShape(exercises: SummaryExercise[], def: ShapeDef): { words: Clou
       }
     }
 
-    return { words: words.map((w) => ({ ...w, cx: w.cx + left })), height: def.h };
+    return { words: words.map((w) => ({ ...w, cx: w.cx + left })), height: def.h, backdrop };
   }
-  return { words: [], height: def.h };
+  return { words: [], height: def.h, backdrop };
 }
 
 /** A cloud word or lockup, stretched to its box and optionally rotated, with a drop shadow. */
@@ -533,7 +641,7 @@ function computeLayout(summary: SessionSummary, shape: CardShape): Layout {
 
   const dividerY = y;
   const cloudY = y + 56;
-  const cloud = layoutShape(summary.exercises, SHAPES[shape]);
+  const cloud = layoutShape(summary.exercises, shapeDef(shape));
 
   // Keep the canvas an integer so the rasteriser is happy.
   const footerY = Math.round(cloudY + cloud.height + 76);
@@ -650,7 +758,7 @@ export const ShareCard = forwardRef<React.ElementRef<typeof Svg>, ShareCardProps
       {scrim ? <Rect x={0} y={0} width={CARD_WIDTH} height={L.height} rx={48} fill="#0b0d12" opacity={0.62} /> : null}
 
       <Shadowed x={PAD} y={96} fontSize={30} fontWeight="800" fill={accent()} letterSpacing={8}>
-        IRON LOG
+        BUKU BESI
       </Shadowed>
       <Shadowed x={PAD} y={182} fontSize={L.titleSize} fontWeight="800">
         {truncateToWidth(L.titleText, L.titleSize, 800, L.titleWidth)}
@@ -687,13 +795,17 @@ export const ShareCard = forwardRef<React.ElementRef<typeof Svg>, ShareCardProps
 
       <Rect x={PAD} y={L.dividerY} width={CONTENT_WIDTH} height={2} fill={WHITE} opacity={0.28} />
 
+      {L.cloud.backdrop.map((b, i) => (
+        <Rect key={`bd${i}`} x={b.x} y={L.cloudY + b.y} width={b.w} height={b.h} rx={Math.min(b.w, b.h) * 0.18} fill={WHITE} opacity={0.07} />
+      ))}
+
       {L.cloud.words.map((word, i) => (
         <CloudText key={`${word.lines.map((l) => l.text).join(' ')}-${i}`} word={word} offsetY={L.cloudY} />
       ))}
 
       <Barbell x={PAD} y={L.footerY - 22} scale={0.62} />
       <Shadowed x={PAD + 76} y={L.footerY + 8} fontSize={26} fontWeight="800" opacity={0.6} letterSpacing={4}>
-        IRON LOG
+        BUKU BESI
       </Shadowed>
     </Svg>
   );

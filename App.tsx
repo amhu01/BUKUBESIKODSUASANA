@@ -5,6 +5,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getDb } from './src/db/database';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { loadDraft } from './src/draftStore';
 import { PrefsContext, applyPrefs, loadPrefs, savePrefs, type Prefs } from './src/prefs';
 import { colors, spacing, themed } from './src/theme';
 
@@ -18,6 +19,8 @@ export default function App() {
 
   useEffect(() => {
     getDb()
+      // Bring back any workout left unsaved by a crash before the Log tab mounts.
+      .then(loadDraft)
       .then(loadPrefs)
       .then(setPrefs)
       .catch((e) => setError(String(e)));

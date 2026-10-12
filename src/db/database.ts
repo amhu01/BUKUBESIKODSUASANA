@@ -1,5 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
+// Keep this name forever: renaming it would orphan every workout already on the phone
+// (the app was called Iron Log when the file was created).
 const DB_NAME = 'ironlog.db';
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
